@@ -134,3 +134,20 @@ nav a.router-link-exact-active {
 }
 
 </style>
+<style>
+:root{
+  /* palet kira-kira seperti background PLN */
+  --pln-teal-1: #18B0C8;  /* terang */
+  --pln-teal-2: #0E8FA9;  /* tengah */
+  --pln-teal-3: #0A6E86;  /* gelap */
+}
+
+html, body, #app {
+  min-height: 100%;
+  /* linear gradient + radial glow di kiri-atas */
+  background:
+    radial-gradient(900px 500px at 25% 30%, rgba(255,255,255,.18), rgba(255,255,255,0) 60%),
+    linear-gradient(135deg, var(--pln-teal-1) 0%, var(--pln-teal-2) 45%, var(--pln-teal-3) 100%);
+  background-attachment: fixed;
+}
+</style>

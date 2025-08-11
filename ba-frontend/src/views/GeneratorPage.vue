@@ -1115,4 +1115,31 @@ textarea {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(108,117,125,0.6);
 }
+
+:root {
+  --grad-yellow: #fff200;   /* kuning */
+  --grad-green:  #2ecc71;   /* hijau */
+  --grad-blue:   #276184;   /* biru (warna dasarmu) */
+}
+
+/* bikin gradient untuk seluruh halaman */
+html, body {
+  min-height: 100%;
+  background: linear-gradient(135deg,
+              var(--grad-yellow) 0%,
+              var(--grad-green) 45%,
+              var(--grad-blue) 100%);
+  background-attachment: fixed; /* biar halus saat scroll */
+}
+
+/* kalau sebelumnya .app-container punya background solid, jadikan transparan */
+.app-container {
+  background: transparent;
+}
+
+/* wrapper flow A juga transparan (kalau diperlukan) */
+.generator-container {
+  background: transparent;
+}
+
 </style>
