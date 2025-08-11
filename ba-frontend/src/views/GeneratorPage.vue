@@ -3,7 +3,7 @@ import { ref, reactive, computed } from 'vue'
 import { uploadTemplate, generateFromUploaded } from '@/services/api'
 import DatePicker from 'vue-datepicker-next';           
 import { QuillEditor } from '@vueup/vue-quill';           
-
+import '@vueup/vue-quill/dist/vue-quill.snow.css'
 
 const step = ref(1)
 const selectedFile = ref(null)
@@ -35,6 +35,16 @@ const formData = ref({
 });
 const signatoryCount = ref(2)
 const isLoading     = ref(false)
+const quillToolbar = [
+  [{ header: [false, 1, 2] }],
+  ['bold', 'italic', 'underline', 'strike'],
+  [{ list: 'ordered' }, { list: 'bullet' }],
+  [{ align: [] }],
+  ['blockquote', 'code'],
+  ['link'],
+  [{ color: [] }],
+  ['clean'],
+]
 
 function handleFileChange(e) {
   const file = e?.target?.files?.[0]
@@ -42,15 +52,22 @@ function handleFileChange(e) {
 }
 
 async function onUploadTemplate() {
-  if (!selectedFile.value) {
-    alert('Pilih file .docx dulu')
-    return
-  }
+  if (!selectedFile.value) { alert('Pilih file .docx dulu'); return }
+
   try {
     const res = await uploadTemplate(selectedFile.value)
     placeholders.value = res.data.placeholders || []
-    templatePath.value  = res.data.templatePath || ''
+    templatePath.value = res.data.templatePath || ''
+
+    // reset total isi lama
+    Object.keys(formValues).forEach(k => delete formValues[k])
     placeholders.value.forEach(k => { formValues[k] = '' })
+
+    // pastikan editor Quill benar2 kosong
+    if (placeholders.value.includes('fitur.deskripsi')) {
+      formValues['fitur.deskripsi'] = ''
+    }
+
     step.value = 2
   } catch (err) {
     console.error(err)
@@ -58,18 +75,24 @@ async function onUploadTemplate() {
   }
 }
 
+function sanitizeHtml(html = '') {
+  return html
+    .replace(/[\u25B2\u25BC]/g, '')   // buang ▲ ▼
+    .replace(/<p>\s*<\/p>/g, '')      // hapus paragraf kosong
+    .trim();
+}
+
 async function onSubmitUploaded() {
   try {
+    if (formValues['fitur.deskripsi']) {
+      formValues['fitur.deskripsi'] = sanitizeHtml(formValues['fitur.deskripsi'])
+    }
+
     const res = await generateFromUploaded(templatePath.value, formValues)
-    const blob = new Blob(
-      [res.data],
-      { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
-    )
+    const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = 'berita_acara.docx'
-    a.click()
+    a.href = url; a.download = 'berita_acara.docx'; a.click()
     URL.revokeObjectURL(url)
   } catch (err) {
     console.error(err)
@@ -89,26 +112,23 @@ const toLabel = (key) => {
 
 const detectType = (key) => {
   const k = key.toLowerCase()
-  // date hanya untuk "tanggal" yang BUKAN terbilang
   if (k.includes('tanggal') && !k.includes('terbilang')) return 'date'
-  if (k.includes('deskripsi') || k.includes('alamat')) return 'textarea'
-  if (k.includes('perusahaan')) return 'select'        // perusahaan jadi select
-  if (k === 'jenisrequest' || k.includes('status')) return 'select'
+  if (k.includes('deskripsi') || k.includes('alamat'))   return 'textarea'
+  if (k.includes('perusahaan'))                           return 'select'
+  if (k === 'jenisrequest' || k === 'tiperequest' || k.includes('status')) return 'select' // ➕
   return 'text'
 }
 
 const selectOptions = (key) => {
   const k = key.toLowerCase()
-  if (k === 'jenisrequest') return ['PENGEMBANGAN', 'PERUBAHAN']
+  if (k === 'jenisrequest' || k === 'tiperequest') return ['PENGEMBANGAN', 'PERUBAHAN'] // ➕
   if (k.includes('status'))  return ['OK', 'REVISI', 'N/A']
   if (k.includes('perusahaan')) {
-    return [
-      'PT PLN (Persero)',
-      'PT PLN Indonesia Comnets Plus (PLN ICON PLUS)'
-    ]
+    return ['PT PLN (Persero)', 'PT PLN Indonesia Comnets Plus (PLN ICON PLUS)']
   }
   return []
 }
+
 
 // grouping: "signatory.penandatangan1.nama" -> "signatory.penandatangan1"
 const groupKey = (key) => {
@@ -150,6 +170,37 @@ const otherKeys = computed(() => {
   return placeholders.value.filter(k => !k.startsWith('signatory.'))
 })
 
+const sections = computed(() => {
+  const r = {
+    umum: [],           // label dsb
+    nomorTanggal: [],   // nomor & semua tanggal (termasuk terbilang)
+    fitur: [],          // fitur.deskripsi/status/keterangan
+    signatory: groupsSignatory.value, // sudah dikelompokkan per orang
+  }
+
+  placeholders.value.forEach(k => {
+    const lk = k.toLowerCase()
+    if (k.startsWith('signatory.')) return // sudah ditangani di signatory
+
+    if (
+      lk.includes('fitur.deskripsi') ||
+      lk.includes('fitur.status') ||
+      lk.includes('fitur.keterangan') ||   // biarkan kalau ada yg pakai "keterangan"
+      lk.includes('fitur.catatan')         // ➕ tambahkan ini
+    ) {
+      r.fitur.push(k); 
+      return;
+    }
+    if (lk.includes('tanggal') || lk.includes('nomor')) {
+      r.nomorTanggal.push(k); return
+    }
+
+    r.umum.push(k)
+  })
+
+  return r
+})
+
 </script>
 
 <template>
@@ -173,87 +224,20 @@ const otherKeys = computed(() => {
     </div>
 
     <!-- STEP 2: Dynamic Form (Flow A) -->
-    <div v-else-if="step === 2" class="form-container p-6 bg-white rounded shadow-md">
+    <div v-else-if="step === 2" class="form-container">
 
-      <h2 class="text-xl font-semibold mb-4">Generate from Template</h2>
-
-      <!-- === Section Signatory (gabung 1,2,3,4, mengetahui) === -->
-      <div class="section-card" v-if="Object.keys(groupsSignatory).length">
-        <div class="section-header"><h2>Signatory</h2></div>
-
-        <div
-          v-for="(keys, who) in groupsSignatory"
-          :key="who"
-          class="fitur-card"
-          style="margin-bottom:12px;"
-        >
-          <div class="section-header" style="border-bottom:1px solid #e5e7eb;">
-            <h3 style="font-size:1rem; color:#276184; font-weight:600;">
-              {{ prettyWho(who) }}
-            </h3>
-          </div>
-
-          <div class="form-grid">
-            <div class="form-group" v-for="key in keys" :key="key">
-              <label class="form-label">{{ toLabel(key) }}</label>
-
-              <date-picker
-                v-if="detectType(key) === 'date'"
-                v-model:value="formValues[key]"
-                format="DD-MM-YYYY"
-                value-type="YYYY-MM-DD"
-              />
-
-              <textarea
-                v-else-if="detectType(key) === 'textarea'"
-                v-model="formValues[key]"
-                rows="3"
-                class="form-input"
-                :placeholder="toLabel(key)"
-              ></textarea>
-
-              <select
-                v-else-if="detectType(key) === 'select'"
-                v-model="formValues[key]"
-                class="form-select"
-              >
-                <option value="" disabled>Pilih {{ toLabel(key) }}</option>
-                <option v-for="opt in selectOptions(key)" :key="opt" :value="opt">
-                  {{ opt }}
-                </option>
-              </select>
-
-              <input
-                v-else
-                type="text"
-                v-model="formValues[key]"
-                class="form-input"
-                :placeholder="toLabel(key)"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- === Section Umum (key lain) === -->
-      <div class="section-card" v-if="otherKeys.length">
-        <div class="section-header"><h2>Umum</h2></div>
+      <!-- === Informasi Umum === -->
+      <div class="section-card" v-if="sections.umum.length">
+        <div class="section-header"><h2>Informasi Umum</h2></div>
 
         <div class="form-grid">
-          <div class="form-group" v-for="key in otherKeys" :key="key">
+          <div class="form-group" v-for="key in sections.umum" :key="key">
             <label class="form-label">{{ toLabel(key) }}</label>
 
-            <date-picker
-              v-if="detectType(key) === 'date'"
-              v-model:value="formValues[key]"
-              format="DD-MM-YYYY"
-              value-type="YYYY-MM-DD"
-            />
-
             <textarea
-              v-else-if="detectType(key) === 'textarea'"
+              v-if="detectType(key) === 'textarea'"
               v-model="formValues[key]"
-              rows="3"
+              rows="2"
               class="form-input"
               :placeholder="toLabel(key)"
             ></textarea>
@@ -264,9 +248,7 @@ const otherKeys = computed(() => {
               class="form-select"
             >
               <option value="" disabled>Pilih {{ toLabel(key) }}</option>
-              <option v-for="opt in selectOptions(key)" :key="opt" :value="opt">
-                {{ opt }}
-              </option>
+              <option v-for="opt in selectOptions(key)" :key="opt" :value="opt">{{ opt }}</option>
             </select>
 
             <input
@@ -280,14 +262,162 @@ const otherKeys = computed(() => {
         </div>
       </div>
 
-      <div class="flex gap-2 mt-4">
-        <button type="button" class="btn-secondary" @click="step = 1">Back</button>
+      <!-- === Nomor & Tanggal === -->
+      <div class="section-card" v-if="sections.nomorTanggal.length">
+        <div class="section-header"><h2>Nomor & Tanggal</h2></div>
+
+        <div class="form-grid">
+          <div class="form-group" v-for="key in sections.nomorTanggal" :key="key">
+            <label class="form-label">{{ toLabel(key) }}</label>
+
+            <date-picker
+              v-if="detectType(key) === 'date'"
+              v-model:value="formValues[key]"
+              type="date"
+              format="DD-MM-YYYY"
+              value-type="YYYY-MM-DD"
+              :append-to-body="true"
+              :editable="false"
+              :clearable="true"
+              input-class="form-input"
+            />
+
+            <input
+              v-else
+              type="text"
+              v-model="formValues[key]"
+              class="form-input"
+              :placeholder="toLabel(key)"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- === Deskripsi Fitur === -->
+      <div class="section-card" v-if="sections.fitur.length">
+        <div class="section-header"><h2>Deskripsi Fitur</h2></div>
+
+        <div class="fitur-card">
+          <!-- deskripsi pakai Quill kalau ada -->
+          <div v-if="sections.fitur.includes('fitur.deskripsi')" class="form-group">
+            <label class="form-label">Deskripsi Kegiatan</label>
+            <div class="editor-wrapper">
+              <QuillEditor
+                :key="'quill-'+templatePath"  
+                v-model:content="formValues['fitur.deskripsi']"
+                contentType="html"
+                theme="snow"
+                :toolbar="quillToolbar"
+                class="ba-quill"
+              />
+            </div>
+          </div>
+
+          <!-- status / keterangan -->
+          <div class="form-grid">
+            <div
+              v-for="key in sections.fitur.filter(k => k !== 'fitur.deskripsi')"
+              :key="key"
+              class="form-group"
+            >
+              <label class="form-label">{{ toLabel(key) }}</label>
+
+              <select
+                v-if="detectType(key) === 'select'"
+                v-model="formValues[key]"
+                class="form-select"
+              >
+                <option value="" disabled>Pilih {{ toLabel(key) }}</option>
+                <option v-for="opt in selectOptions(key)" :key="opt" :value="opt">{{ opt }}</option>
+              </select>
+
+              <input
+                v-else
+                type="text"
+                v-model="formValues[key]"
+                class="form-input"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- === Daftar Penandatangan === -->
+      <div class="section-card" v-if="Object.keys(sections.signatory).length">
+        <div class="section-header"><h2>Daftar Penandatangan</h2></div>
+
+        <div
+          class="fitur-card"
+          v-for="(keys, who) in sections.signatory"
+          :key="who"
+          style="margin-bottom:12px;"
+        >
+          <div class="signer-header" style="margin-bottom:10px;">
+            <strong>{{ prettyWho(who) }}</strong>
+          </div>
+
+          <div class="signer-grid">
+            <div class="signer-header">
+              <span>Nama Lengkap</span>
+              <span>Jabatan</span>
+              <span>Perusahaan</span>
+              <span>Penandatangan</span>
+            </div>
+
+            <div class="signer-row">
+              <!-- Nama -->
+              <input
+                type="text"
+                class="form-input"
+                v-model="formValues[`${'signatory.' + who + '.nama'}`]"
+              />
+
+              <!-- Jabatan -->
+              <input
+                type="text"
+                class="form-input"
+                v-model="formValues[`${'signatory.' + who + '.jabatan'}`]"
+              />
+
+              <!-- Perusahaan (select) -->
+              <select
+                class="form-select"
+                v-model="formValues[`${'signatory.' + who + '.perusahaan'}`]"
+              >
+                <option
+                  v-for="opt in selectOptions('perusahaan')"
+                  :key="opt"
+                  :value="opt"
+                >{{ opt }}</option>
+              </select>
+
+              <!-- tipe (readonly) -->
+              <input
+                v-if="(placeholders || []).includes('signatory.' + who + '.tipe')"
+                type="text"
+                class="form-input"
+                v-model="formValues['signatory.' + who + '.tipe']"
+              />
+              <input
+                v-else
+                type="text"
+                class="form-input readonly"
+                :value="(prettyWho(who) + '').toLowerCase().replace(/\s+/g,'')"
+                readonly
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tombol -->
+      <div class="action-section">
         <button type="button" class="btn-primary" @click="onSubmitUploaded">
-          Generate from Template
+          <span class="loading-spinner" v-if="isLoading"></span>
+          {{ isLoading ? 'Generating...' : 'Generate File' }}
         </button>
       </div>
     </div>
-
     <!-- STEP 3: Standard BA Form (Flow B) -->
     <div v-else class="app-container">
       <header class="app-header">
@@ -443,8 +573,50 @@ const otherKeys = computed(() => {
 }
 
 :deep(.mx-datepicker) { width: 100%; }
-:deep(.mx-input) { width: 100%; }
-:deep(.mx-datepicker-popup) { z-index: 2000; }
+:deep(.mx-input) {
+  width: 100%;
+  height: 40px;
+  padding: 10px 12px;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  font-size: .95rem;
+}
+:deep(.mx-datepicker-popup) { z-index: 9999 !important; }
+
+.action-section { display:flex; justify-content:center; margin: 24px 0 8px; }
+.btn-primary {
+  background: #fff200; color:#276184; border:none; padding:12px 36px;
+  border-radius: 999px; font-weight:600; box-shadow:0 4px 15px rgba(102,126,234,.4);
+}
+
+/* lebar & border rapi */
+.ba-quill :deep(.ql-toolbar.ql-snow) {
+  border: 2px solid #e1e5e9;
+  border-bottom: 1px solid #e1e5e9;
+  border-radius: 8px 8px 0 0;
+  background-color: #f8f9fa;
+}
+
+.ba-quill :deep(.ql-container.ql-snow) {
+  border: 2px solid #e1e5e9;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background-color: #fff;
+}
+
+/* batasi tinggi editor, bisa geser scroll */
+.ba-quill :deep(.ql-editor) {
+  min-height: 140px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 1rem;
+}
+
+/* pastikan warna teks normal */
+.ba-quill :deep(.ql-editor *){
+  color:#333 !important;
+}
+
 
 html, body {
   height: 100%;
