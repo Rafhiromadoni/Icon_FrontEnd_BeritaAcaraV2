@@ -1,10 +1,14 @@
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { nextTick, ref, reactive, computed } from 'vue'
+import { renderAsync } from 'docx-preview'
 import { uploadTemplate, generateFromUploaded } from '@/services/api'
 import DatePicker from 'vue-datepicker-next';           
 import { QuillEditor } from '@vueup/vue-quill';           
 import '@vueup/vue-quill/dist/vue-quill.snow.css'
 
+const isPreviewVisible = ref(false)
+const fileBlob         = ref(null)
+const docxContainer    = ref(null)
 const step = ref(1)
 const selectedFile = ref(null)
 const placeholders = ref([])
@@ -46,6 +50,17 @@ const quillToolbar = [
   ['clean'],
 ]
 
+function downloadFile() {
+  if (!fileBlob.value) return
+  const url  = URL.createObjectURL(fileBlob.value)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = 'berita_acara.docx'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+
 function handleFileChange(e) {
   const file = e?.target?.files?.[0]
   if (file) selectedFile.value = file
@@ -83,22 +98,35 @@ function sanitizeHtml(html = '') {
 }
 
 async function onSubmitUploaded() {
+  isLoading.value = true
   try {
     if (formValues['fitur.deskripsi']) {
       formValues['fitur.deskripsi'] = sanitizeHtml(formValues['fitur.deskripsi'])
     }
 
-    const res = await generateFromUploaded(templatePath.value, formValues)
-    const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = 'berita_acara.docx'; a.click()
-    URL.revokeObjectURL(url)
+    const res  = await generateFromUploaded(templatePath.value, formValues)
+    const blob = new Blob(
+      [res.data],
+      { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
+    )
+
+    // simpan blob, tampilkan preview
+    fileBlob.value = blob
+    isPreviewVisible.value = true
+
+    await nextTick()
+    if (docxContainer.value) {
+      docxContainer.value.innerHTML = ''
+      await renderAsync(fileBlob.value, docxContainer.value)
+    }
   } catch (err) {
     console.error(err)
     alert('Gagal generate: ' + (err.response?.data || err.message))
+  } finally {
+    isLoading.value = false
   }
 }
+
 
 const toLabel = (key) => {
   // "signatory.penandatangan1.nama" -> "Signatory > Penandatangan1 > Nama"
@@ -115,12 +143,13 @@ const detectType = (key) => {
   if (k.includes('tanggal') && !k.includes('terbilang')) return 'date'
   if (k.includes('deskripsi') || k.includes('alamat'))   return 'textarea'
   if (k.includes('perusahaan'))                           return 'select'
-  if (k === 'jenisrequest' || k === 'tiperequest' || k.includes('status')) return 'select' // ➕
+  if (k === 'tahap' || k === 'jenisrequest' || k === 'tiperequest' || k.includes('status')) return 'select' // ➕
   return 'text'
 }
 
 const selectOptions = (key) => {
   const k = key.toLowerCase()
+  if (k === 'tahap') return ['Tidak Ada Tahap', 'Tahap I', 'Tahap II', 'Tahap III', 'Tahap IV']
   if (k === 'jenisrequest' || k === 'tiperequest') return ['PENGEMBANGAN', 'PERUBAHAN'] // ➕
   if (k.includes('status'))  return ['OK', 'REVISI', 'N/A']
   if (k.includes('perusahaan')) {
@@ -557,9 +586,25 @@ const sections = computed(() => {
               {{ isLoading ? 'Generating...' : 'Generate File' }}
             </button>
           </div>
-
         </form>
       </main>
+    </div>
+        <!-- … STEP 1 & STEP 2 & STEP 3 di atas … -->
+    <div v-if="fileBlob" class="action-section" style="gap:12px; margin-top:12px;">
+      <button class="btn-secondary" type="button" @click="isPreviewVisible = !isPreviewVisible">
+        {{ isPreviewVisible ? 'Sembunyikan Preview' : 'Tampilkan Preview' }}
+      </button>
+      <button class="btn-success" type="button" @click="downloadFile">
+        📥 Download .docx
+      </button>
+    </div>
+
+    <!-- Container preview -->
+    <div v-if="isPreviewVisible" class="preview-section">
+      <div class="section-header-preview"><h2>Preview Dokumen</h2></div>
+      <div class="preview-container">
+        <div ref="docxContainer" class="docx-content"></div>
+      </div>
     </div>
   </div>
 </template>
@@ -570,6 +615,20 @@ const sections = computed(() => {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+.preview-section { margin-top: 24px; }
+.preview-container {
+  background: white;
+  border-radius: 15px;
+  padding: 25px;
+  box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+}
+.docx-content {
+  background: #f8f9fa;
+  padding: 30px;
+  border-radius: 10px;
+  min-height: 500px;
+  border: 1px solid #e9ecef;
 }
 
 :deep(.mx-datepicker) { width: 100%; }
